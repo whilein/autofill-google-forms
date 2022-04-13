@@ -27,23 +27,30 @@ class Value:
         pass
 
 class ValueFile(Value):
-    def __init__(self, file):
+    def __init__(self, file, save = False):
         self.counter = 0
+        self.file = file
+        self.save = save
 
         with open(file, 'r') as f:
             self.values = list(map(lambda value: value.strip(), f.readlines()))
 
     def __repr__(self):
-        return "File{of=%s}" % self.values
+        return "File{from=%s}" % self.file
 
     def __str__(self):
-        return "File{of=%s}" % self.values
+        return "File{from=%s}" % self.file
 
     def get_value(self):
         try:
-            return self.values[self.counter % len(self.values)]
+            return self.values.pop(0)
         finally:
-            self.counter += 1
+            if self.save:
+                with open(self.file, 'w') as f:
+                    for value in self.values:
+                        f.write(value)
+                        f.write("\r\n")
+                    f.flush()
 
 class ValueString(Value):
     def __init__(self, values):
@@ -72,6 +79,8 @@ class Entries:
         if type(raw) is str:
             if raw.startswith("FILE:"):
                 return ValueFile(raw[5:])
+            elif raw.startsWith("POP:"):
+                return ValueFile(raw[4:], save=True)
 
             raw = [raw]
         
@@ -140,6 +149,13 @@ for i in range(args.count or 1):
     for (k, v) in pages[-1].entries.entries.items():
         data["entry.%s" % k] = v.get_value()
 
-    headers = {'Referer':'https://docs.google.com/forms/d/e/%s/viewform'% k,'User-Agent': "Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/28.0.1500.52 Safari/537.36"}
+    headers = {
+        'Referer':'https://docs.google.com/forms/d/e/%s/viewform' % form,
+        'User-Agent': "Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/28.0.1500.52 Safari/537.36"
+    }
+    
     resp = requests.post(url, data=data, headers=headers)
     print("Request %s sent.." % i)
+    with open('%s_%s.html' % (form, i), 'w', encoding='UTF-8') as f:
+        f.write(resp.text)
+        f.flush()
