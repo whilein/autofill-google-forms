@@ -1,30 +1,35 @@
-import argparse
+import random
+import time
 import requests
 import json
-
-parser = argparse.ArgumentParser(description='Автоматические ответы на гугл формы')
-
-parser.add_argument("id", type=str,
-                    help='Имя формы')
-                    
-parser.add_argument("--import-file", type=str, help='Импорт значений из json файла')
-
-parser.add_argument("-с", "--count", type=int,
-                    help='Количество')
-
-parser.add_argument("-s", "--seed", type=int,
-                    help='Сид')
-
-parser.add_argument("-e", "--entry", action='append', nargs=2, metavar=('id', 'value'), help='Данные формы')
-
-args = parser.parse_args()
-
-seed = args.seed or 0
-form = args.id
 
 class Value:
     def get_value():
         pass
+
+class ValueWeightedRandom(Value):
+    def __init__(self, values):
+        self.values = values
+        self.sum = sum(values.values())
+    
+    def __repr__(self):
+        return "WeightedRandom{from=%s}" % self.values
+
+    def __str__(self):
+        return "WeightedRandom{from=%s}" % self.values
+
+    def get_value(self):
+        rand = random.random() * self.sum
+
+        i = 0
+
+        for (item, weight) in self.values.items():
+            if rand >= i and rand < i + weight:
+                return item
+            last = item
+            i += weight
+        
+        return last
 
 class ValueFile(Value):
     def __init__(self, file, save = False):
@@ -79,10 +84,12 @@ class Entries:
         if type(raw) is str:
             if raw.startswith("FILE:"):
                 return ValueFile(raw[5:])
-            elif raw.startsWith("POP:"):
+            elif raw.startswith("POP:"):
                 return ValueFile(raw[4:], save=True)
 
             raw = [raw]
+        elif type(raw) is dict:
+            return ValueWeightedRandom(raw)
         
         return ValueString(raw)
 
@@ -105,57 +112,84 @@ class Page:
     def __str__(self):
         return "%s: %s" % (self.id, self.entries)
 
-import_file = args.import_file
+def main():
+    import argparse
 
-pages = {}
+    parser = argparse.ArgumentParser(description='Автоматические ответы на гугл формы')
 
-if import_file:
-    pages = list()
+    parser.add_argument("id", type=str,
+                        help='Имя формы')
 
-    with open(import_file, "r") as file:
-        for (id, entries) in json.load(file).items():
-            pages.append(Page(int(id), Entries({ key:Entries.wrap(value) for (key, value) in entries.items() })))
-else:
-    entries = Entries({})
+    parser.add_argument("--import-file", type=str, help='Импорт значений из json файла')
 
-    for entry in args.entry:
-        entries.add_entry(entry[0], entry[1])
-    
-    pages = list((Page(0, entries), ))
+    parser.add_argument("-c", "--count", type=int,
+                        help='Количество')
 
-url = "https://docs.google.com/forms/d/e/%s/formResponse" % form
+    parser.add_argument("-s", "--seed", type=int,
+                        help='Сид')
 
-for i in range(args.count or 1):
-    ids = ",".join([str(page.id) for page in pages])
+    parser.add_argument("-e", "--entry", action='append', nargs=2, metavar=('id', 'value'), help='Данные формы')
+    parser.add_argument("-d", "--delay", type=int, help='Задержка в секундах (по умолчанию 0)')
 
-    if len(pages) > 1:
-        previousPages = [[None, int(id), entry.get_value(), 0] for page in pages[0:-1] for (id, entry) in page.entries.entries.items()]
+    args = parser.parse_args()
+
+    seed = args.seed or 0
+    delay = args.delay or 0
+    form = args.id
+    import_file = args.import_file
+
+    pages = {}
+
+    if import_file:
+        pages = list()
+
+        with open(import_file, "r") as file:
+            for (id, entries) in json.load(file).items():
+                pages.append(Page(int(id), Entries({ key: Entries.wrap(value) for (key, value) in entries.items() })))
     else:
-        previousPages = None
+        entries = Entries({})
 
-    partialResponse = [
-        previousPages,
-        None,
-        str(seed)
-    ]
+        for entry in args.entry:
+            entries.add_entry(entry[0], entry[1])
 
-    data = {
-        "partialResponse": json.dumps(partialResponse),
-        "pageHistory": ids,
-        'draftResponse': [],
-        'fbzx': seed
-    }
+        pages = list((Page(0, entries), ))
 
-    for (k, v) in pages[-1].entries.entries.items():
-        data["entry.%s" % k] = v.get_value()
+    url = "https://docs.google.com/forms/d/e/%s/formResponse" % form
 
-    headers = {
-        'Referer':'https://docs.google.com/forms/d/e/%s/viewform' % form,
-        'User-Agent': "Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/28.0.1500.52 Safari/537.36"
-    }
-    
-    resp = requests.post(url, data=data, headers=headers)
-    print("Request %s sent.." % i)
-    with open('%s_%s.html' % (form, i), 'w', encoding='UTF-8') as f:
-        f.write(resp.text)
-        f.flush()
+    for i in range(args.count or 1):
+        ids = ",".join([str(page.id) for page in pages])
+
+        if len(pages) > 1:
+            previousPages = [[None, int(id), entry.get_value(), 0] for page in pages[0:-1] for (id, entry) in page.entries.entries.items()]
+        else:
+            previousPages = None
+
+        partialResponse = [
+            previousPages,
+            None,
+            str(seed)
+        ]
+
+        data = {
+            "partialResponse": json.dumps(partialResponse),
+            "pageHistory": ids,
+            'draftResponse': [],
+            'fbzx': seed
+        }
+
+        for (k, v) in pages[-1].entries.entries.items():
+            data["entry.%s" % k] = v.get_value()
+
+        headers = {
+            'Referer':'https://docs.google.com/forms/d/e/%s/viewform' % form,
+            'User-Agent': "Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/28.0.1500.52 Safari/537.36"
+        }
+
+        requests.post(url, data=data, headers=headers)
+        print("Request %s sent.." % i)
+     
+        if delay >= 0:
+            time.sleep(delay)
+
+if __name__ == "__main__":
+    main()
